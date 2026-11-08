@@ -1,14 +1,23 @@
 {
-  "name": "react-debug-mcp",
+  "name": "reagent-mcp",
   "version": "0.1.0",
-  "description": "Agent-oriented React debugging via MCP. Dev-only runtime that lets an MCP agent inspect a running React app's Redux state, storage and runtime errors.",
+  "description": "Agent-oriented React debugging via MCP. Dev-only runtime that lets an MCP agent inspect a running React app's Redux state, storage, route and network activity.",
   "license": "MIT",
+  "author": "Anderson Araujo Macedo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dojiDoMal/reagent-mcp.git"
+  },
+  "homepage": "https://github.com/dojiDoMal/reagent-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/dojiDoMal/reagent-mcp/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=18"
   },
   "bin": {
-    "react-debug-mcp": "./dist/server/cli.js"
+    "reagent-mcp": "./dist/server/cli.js"
   },
   "exports": {
     "./react": {
@@ -23,28 +32,38 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "compile": "tsc -p tsconfig.json",
+    "minify": "node scripts/minify.mjs",
+    "build": "npm run compile && npm run minify",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "clean": "rm -rf dist"
+    "prepublishOnly": "npm run clean && npm run build"
   },
   "keywords": [
     "react",
     "redux",
     "mcp",
+    "model-context-protocol",
+    "agent",
+    "reagent",
     "debugging",
     "devtools"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "jsan": "^3.1.14",
-    "ws": "^8.18.0",
-    "zod": "^3.23.0"
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "jsan": "3.1.14",
+    "ws": "8.22.0",
+    "zod": "3.25.76"
   },
   "devDependencies": {
-    "@types/node": "^18.19.0",
-    "@types/ws": "^8.5.0",
-    "typescript": "^5.4.0"
+    "@types/node": "18.19.130",
+    "@types/ws": "8.18.2",
+    "esbuild": "0.24.0",
+    "typescript": "5.9.3"
   },
   "peerDependencies": {
     "react": ">=17"

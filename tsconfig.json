@@ -5,8 +5,8 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2021", "DOM", "DOM.Iterable"],
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+    "declarationMap": false,
+    "sourceMap": false,
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
@@ -17,5 +17,5 @@
     "resolveJsonModule": true
   },
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "examples"]
+  "exclude": ["node_modules", "dist"]
 }

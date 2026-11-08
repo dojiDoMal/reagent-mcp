@@ -10,14 +10,16 @@
  * so another local page cannot read the app's state.
  */
 
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
 import {
   PROTOCOL_VERSION,
+  SERVER_HELLO_NAME,
   type BridgeRequest,
   type BridgeRequestEnvelope,
   type BridgeResponse,
   type RuntimeHandshake,
+  type ServerHello,
 } from "../core/protocol.js";
 
 interface Session {
@@ -28,8 +30,15 @@ interface Session {
 export interface BridgeHostOptions {
   port: number;
   host?: string;
-  /** Allowed Origin of the host app, e.g. "http://localhost:5000". */
-  allowedOrigin?: string;
+  /**
+   * Allowed Origin(s) of the host app. A single origin
+   * ("http://localhost:5000") or a list, to cover a browser dev server and
+   * one or more WebView schemes at once, e.g.
+   * ["http://localhost:5000", "https://meu.inss", "app://meu.inss"].
+   *
+   * When omitted, every origin is accepted (no origin check).
+   */
+  allowedOrigin?: string | string[];
   requestTimeoutMs?: number;
 }
 
@@ -40,14 +49,65 @@ export class BridgeHost {
     string,
     { resolve: (r: BridgeResponse) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
   >();
+  /** Normalized allowed origins; empty means "accept any origin". */
+  private readonly allowedOrigins: Set<string>;
 
-  constructor(private readonly opts: BridgeHostOptions) {}
+  constructor(private readonly opts: BridgeHostOptions) {
+    const origins = opts.allowedOrigin;
+    const list = origins == null ? [] : Array.isArray(origins) ? origins : [origins];
+    this.allowedOrigins = new Set(list.filter((o) => o.length > 0));
+  }
 
-  start(): void {
+  start(): Promise<void> {
     const host = this.opts.host ?? "127.0.0.1";
-    this.wss = new WebSocketServer({ port: this.opts.port, host });
+    const wss = new WebSocketServer({ port: this.opts.port, host });
+    this.wss = wss;
+
+    // Resolve once the listener is actually bound; reject if the bind fails
+    // (e.g. EADDRINUSE when a previous instance is still holding the port).
+    // Without this handler, ws emits an unhandled 'error' event and crashes
+    // the whole process *after* start() has already returned.
+    const listening = new Promise<void>((resolve, reject) => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        wss.off("listening", onListening);
+        if (err.code === "EADDRINUSE") {
+          const inUse: NodeJS.ErrnoException = new Error(
+            `port ${this.opts.port} is already in use on ${host}. ` +
+              `Another reagent-mcp instance may still be running. ` +
+              `Stop it, or start this one with --port <n> (and set the same port in the runtime).`
+          );
+          inUse.code = "EADDRINUSE";
+          reject(inUse);
+        } else {
+          reject(err);
+        }
+      };
+      const onListening = () => {
+        wss.off("error", onError);
+        // Now that we're bound, keep a permanent error handler so a late
+        // server error doesn't crash the process as an unhandled event.
+        wss.on("error", (err) => {
+          console.error("[reagent-mcp] bridge error:", err);
+        });
+        resolve();
+      };
+      wss.once("error", onError);
+      wss.once("listening", onListening);
+    });
 
     this.wss.on("connection", (socket, req) => {
+      // Advertise identity to every client before any further checks. This is
+      // how a competing instance confirms the port is held by a real
+      // reagent-mcp bridge (and learns our pid) so it can take over
+      // safely. It exposes no app state, so it is safe to send pre-origin.
+      const hello: ServerHello = {
+        type: "server-hello",
+        name: SERVER_HELLO_NAME,
+        protocolVersion: PROTOCOL_VERSION,
+        pid: process.pid,
+      };
+      socket.send(JSON.stringify(hello));
+
       if (!this.isOriginAllowed(req)) {
         socket.close(1008, "origin not allowed");
         return;
@@ -59,6 +119,8 @@ export class BridgeHost {
         }
       });
     });
+
+    return listening;
   }
 
   stop(): void {
@@ -130,9 +192,77 @@ export class BridgeHost {
   }
 
   private isOriginAllowed(req: IncomingMessage): boolean {
-    if (!this.opts.allowedOrigin) return true;
-    return req.headers.origin === this.opts.allowedOrigin;
+    if (this.allowedOrigins.size === 0) return true;
+    const origin = req.headers.origin;
+    return typeof origin === "string" && this.allowedOrigins.has(origin);
   }
+
+  /**
+   * Connect to whatever is already listening on `port` and read its
+   * server-hello to decide whether it is a reagent-mcp bridge we may
+   * safely take over.
+   *
+   * Resolves with the parsed ServerHello when the peer identifies itself as a
+   * compatible reagent-mcp bridge, or null in every other case (not a WS
+   * server, no hello, wrong name, incompatible protocol, or timeout). It never
+   * rejects: an unidentifiable peer is simply "not ours", which the caller
+   * treats as "do not touch it".
+   */
+  static probeExisting(
+    port: number,
+    host = "127.0.0.1",
+    timeoutMs = 1500
+  ): Promise<ServerHello | null> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value: ServerHello | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          ws.close();
+        } catch {
+          // ignore close errors; we are discarding this probe socket anyway.
+        }
+        resolve(value);
+      };
+
+      const timer = setTimeout(() => finish(null), timeoutMs);
+
+      const ws = new WebSocket(`ws://${host}:${port}`);
+
+      ws.on("message", (data) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(String(data));
+        } catch {
+          finish(null);
+          return;
+        }
+        finish(parseServerHello(parsed));
+      });
+      ws.on("error", () => finish(null));
+      ws.on("close", () => finish(null));
+    });
+  }
+}
+
+/** Validate an unknown value as a compatible ServerHello, else return null. */
+function parseServerHello(value: unknown): ServerHello | null {
+  if (typeof value !== "object" || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (v.type !== "server-hello") return null;
+  if (v.name !== SERVER_HELLO_NAME) return null;
+  if (v.protocolVersion !== PROTOCOL_VERSION) return null;
+  if (typeof v.pid !== "number" || !Number.isInteger(v.pid) || v.pid <= 0) {
+    return null;
+  }
+  return {
+    type: "server-hello",
+    name: v.name,
+    protocolVersion: v.protocolVersion,
+    pid: v.pid,
+  };
 }
 
 function isHandshakeMessage(

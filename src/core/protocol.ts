@@ -21,7 +21,6 @@ export type BridgeRequest =
   | { type: "get_app_snapshot" }
   | { type: "get_redux_state"; path?: string }
   | { type: "get_storage"; area: "local" | "session"; keys?: string[] }
-  | { type: "get_runtime_errors"; limit?: number }
   | { type: "get_route" }
   | { type: "get_network_activity"; limit?: number };
 
@@ -44,6 +43,24 @@ export interface BridgeRequestEnvelope {
   request: BridgeRequest;
 }
 
+/** Stable identity string a bridge host advertises on every new connection. */
+export const SERVER_HELLO_NAME = "reagent-mcp";
+
+/**
+ * First message the bridge host sends to any client that connects, before
+ * origin validation. It lets a competing instance confirm that whatever is
+ * holding the port is genuinely a reagent-mcp bridge (and learn its pid)
+ * so it can take the port over safely instead of killing an unrelated process.
+ */
+export interface ServerHello {
+  type: "server-hello";
+  /** Always SERVER_HELLO_NAME. Used to confirm identity. */
+  name: string;
+  protocolVersion: number;
+  /** OS pid of the bridge host process, so a client can signal it. */
+  pid: number;
+}
+
 /** Info the runtime advertises on connect, so the server knows capabilities. */
 export interface RuntimeHandshake {
   protocolVersion: number;
@@ -52,6 +69,12 @@ export interface RuntimeHandshake {
   origin: string;
   /** Adapters the app registered (redux, storage, router, ...). */
   adapters: string[];
+  /**
+   * Whether the runtime is in strict mode (the default). When false, storage
+   * allowlists are ignored (full storage access) and the MCP server requires
+   * explicit risk acknowledgement before running any tool.
+   */
+  strictMode: boolean;
 }
 
 /** Summary returned by get_app_snapshot. */
@@ -62,5 +85,7 @@ export interface AppSnapshot {
   adapters: string[];
   /** Current route path when a router adapter is present. */
   route?: string;
+  /** Whether the runtime is running in strict mode. */
+  strictMode: boolean;
   capturedAt: string;
 }

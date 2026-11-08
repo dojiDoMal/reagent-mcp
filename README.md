@@ -1,100 +1,226 @@
-# react-debug-mcp
+# reagent-mcp
 
-Debugging orientado a agentes para aplicações React, via **Model Context
-Protocol (MCP)**. Instalado como `devDependency`, permite que um agente (ex.
-Kiro) inspecione o **estado real** de uma aplicação React em execução — Redux,
-Web Storage e erros de runtime — em vez de depender só da leitura do código.
+Uma ferramenta que deixa um agente de IA (como o Kiro) "enxergar" o que está acontecendo dentro da sua aplicação React enquanto ela roda. Em vez de só ler o código, o agente consegue olhar os dados reais do app: o estado do Redux, o que está salvo no storage do navegador, a rota atual e as chamadas de rede.
 
-> Status: v1 (prova de conceito). Alvo: **CRA/Webpack + React 18 + Redux
-> clássico**, servido em loopback. Ferramentas somente de leitura.
+Você instala como dependência de desenvolvimento.
+
+> **Versão:** v1
+> **Funciona com:** CRA/Webpack + React 18 + Redux clássico
+> **Segurança:** roda só na sua máquina por padrão e **só lê** dados, nunca altera nada.
 
 ## Como funciona
 
+Os dados do seu app vivem no navegador. O agente conversa com um servidor, e o seu app (no navegador) se conecta a esse servidor para responder às perguntas.
+
 ```
-Kiro  --stdio-->  MCP server (Node)  --WS cliente-->  runtime (navegador, WS listener lógico)
-                                                         +-- Redux store
-                                                         +-- localStorage / sessionStorage
-                                                         +-- erros de runtime
+Kiro  →  servidor MCP (Node)  →  seu app no navegador
+                                    ├── estado do Redux
+                                    ├── localStorage / sessionStorage
+                                    └── rota / chamadas de rede
 ```
 
-O estado vive no navegador, então ele é a fonte da verdade. Como uma página não
-pode abrir um socket de escuta (a WebSocket do navegador é só cliente), na
-prática **o MCP server hospeda o listener WS em loopback e o runtime do
-navegador conecta como cliente**. Os papéis lógicos se mantêm: o runtime apenas
-*responde* consultas; o server apenas *repassa* os pedidos do agente. Se não há
-aba aberta, não há runtime conectado e o server responde "aplicação não
-conectada".
+Resumindo o fluxo:
+- O agente pergunta algo (ex: "qual o estado do Redux?").
+- O servidor repassa a pergunta para o app.
+- O app responde com os dados reais.
+- Se nenhuma aba do app estiver aberta, você recebe a mensagem "aplicação não conectada".
 
 ## Instalação
 
 ```bash
-npm install -D react-debug-mcp
+npm install -D reagent-mcp
 ```
 
-## Uso (CRA)
+## Como usar
 
-Inicie o runtime no entry do app, atrás de um guard de desenvolvimento:
+Você liga a ferramenta no arquivo principal do seu app, mas **só em ambiente de desenvolvimento**. Assim, quando você gerar o build de produção, essa parte é removida automaticamente e **não vai parar no app final dos usuários**.
+
+O jeito de escrever essa "trava de desenvolvimento" muda um pouco dependendo da ferramenta de build (CRA ou Vite).
+
+Exemplo de uma `store` Redux usada nos exemplos abaixo:
+
+```ts
+// src/store.ts
+import { createStore, combineReducers, type AnyAction } from "redux";
+
+interface AuthState {
+  user: { id: number; name: string } | null;
+  lastLogin: string | null;
+}
+
+const initialAuth: AuthState = { user: null, lastLogin: null };
+
+function authReducer(state: AuthState = initialAuth, action: AnyAction): AuthState {
+  switch (action.type) {
+    case "auth/login":
+      return { user: action.payload, lastLogin: new Date().toISOString() };
+    case "auth/logout":
+      return initialAuth;
+    default:
+      return state;
+  }
+}
+
+const rootReducer = combineReducers({ auth: authReducer });
+
+export type RootState = ReturnType<typeof rootReducer>;
+export const store = createStore(rootReducer);
+```
+
+### CRA (Create React App / Webpack)
+
+No CRA, a trava usa `process.env.NODE_ENV`. No build de produção, o Webpack remove esse trecho sozinho.
 
 ```tsx
 // src/index.tsx
 import { store } from "./store";
 
 if (process.env.NODE_ENV === "development") {
-  import("react-debug-mcp/react").then(({ initDebugRuntime }) => {
-    initDebugRuntime({
-      adapters: {
-        redux: { store },
-        storage: { localStorage: ["feature-flags"], sessionStorage: [] },
-      },
-    });
+  import("reagent-mcp/react")
+    .then(({ initDebugRuntime }) => {
+      initDebugRuntime({
+        adapters: {
+          redux: { store },
+          storage: {
+            // O agente só consegue ler estas chaves.
+            localStorage: ["feature-flags", "ui-prefs"],
+            sessionStorage: [],
+          },
+        },
+      });
+    })
+    .catch((err) => {});
+}
+```
+
+O CRA normalmente roda em `http://localhost:3000`. Se você usar outra porta, ajuste o valor de `--allowed-origin` na configuração do MCP.
+
+### Vite
+
+No Vite, a trava usa `import.meta.env.DEV`:
+
+```tsx
+// src/main.tsx
+import { store } from "./store";
+
+if (import.meta.env.DEV) {
+  import("reagent-mcp/react")
+    .then(({ initDebugRuntime }) => {
+      initDebugRuntime({
+        adapters: {
+          redux: { store },
+          storage: {
+            // O agente só consegue ler estas chaves.
+            localStorage: ["feature-flags", "ui-prefs"],
+            sessionStorage: [],
+          },
+        },
+      });
+    })
+    .catch((err) => {});
+}
+```
+
+O Vite normalmente roda em `http://localhost:5173`. Se usar outra porta, ajuste o `--allowed-origin` na configuração do MCP.
+
+### Opções de conexão
+
+Por padrão, o app se conecta em `ws://127.0.0.1:7345`. Se o app estiver rodando em outro lugar (ver a parte de WebView/Cordova mais abaixo), você pode mudar o destino:
+
+| Opção | Padrão | O que faz |
+|---|---|---|
+| `host` | `"127.0.0.1"` | Onde o servidor pode ser encontrado. |
+| `port` | `7345` | A porta usada. |
+| `url` | — | URL completa, que substitui `host`/`port` (ex. `ws://10.0.2.2:7345`). |
+
+```ts
+initDebugRuntime({
+  host: "10.0.2.2", // ou url: "ws://10.0.2.2:7345"
+  adapters: { redux: { store } },
+});
+```
+
+### WebView / Cordova (builds de desenvolvimento)
+
+Em um app Cordova/Capacitor, o seu app roda dentro de um WebView no celular ou no emulador, e não no navegador do seu computador. Isso muda três coisas:
+
+**1. A trava de desenvolvimento.** Um build do app roda com `NODE_ENV=production`, então a trava `process.env.NODE_ENV === "development"` acabaria removendo a ferramenta. Para resolver, use uma variável só sua, que você pode ligar quando quiser:
+
+```tsx
+if (process.env.REACT_APP__DEBUG_MCP === "true") {
+  import("reagent-mcp/react").then(({ initDebugRuntime }) => {
+    initDebugRuntime({ host: "10.0.2.2", adapters: { redux: { store } } });
   });
 }
 ```
 
-Em CRA, esse ramo vira código morto no `build`, então o runtime **não entra no
-bundle de produção**. Esse guard é o mecanismo primário de exclusão de produção.
+**2. O endereço do servidor.** Aponte `host`/`url` para onde o aparelho consegue achar o servidor:
+- Emulador Android: `10.0.2.2` (é o apelido que o emulador usa para o seu computador).
+- Celular físico: o IP do seu computador na rede (ex. `192.168.0.10`), com os dois na mesma rede.
 
-## Configuração MCP no Kiro
+Nesse caso, o servidor também precisa aceitar conexões de fora da própria máquina — veja a flag `--host` mais abaixo.
+
+**3. Origem e conexão insegura.** A origem do app no WebView não é `localhost`, e sim o esquema usado para servir o app (ex. `https://meu.aplicativo` ou `app://meu.aplicativo`). Você precisa adicionar essa origem à lista de origens permitidas do servidor. Além disso, uma página em `https://` não consegue abrir uma conexão insegura `ws://`. Em desenvolvimento, sirva o WebView em `http://` e permita tráfego "cleartext" (no Cordova Android: `Scheme=http` + `usesCleartextTraffic="true"`) — **apenas em desenvolvimento, nunca em produção.**
+
+## Configuração do MCP no Kiro
 
 ```json
 {
   "mcpServers": {
-    "react-debug": {
+    "reagent": {
       "command": "npx",
-      "args": ["react-debug-mcp", "start", "--allowed-origin", "http://localhost:3000"]
+      "args": ["reagent-mcp", "start", "--allowed-origin", "http://localhost:3000"]
     }
   }
 }
 ```
 
-`--allowed-origin` restringe o canal WS à origem do seu app; outras páginas são
-recusadas.
+O `--allowed-origin` serve para liberar só a origem do seu app; qualquer outra página é recusada. Aponte para a origem onde seu app roda: `http://localhost:3000` (padrão do CRA) ou `http://localhost:5173` (padrão do Vite).
 
-## Ferramentas MCP (v1)
+### Opções da linha de comando
 
-| Ferramenta | Descrição |
+```
+reagent-mcp start [--port <n>] [--host <h>] [--allowed-origin <origin>]... [--no-takeover]
+```
+
+| Flag | Padrão | O que faz |
+|---|---|---|
+| `--port` | `7345` | A porta do servidor. |
+| `--host` | `127.0.0.1` | A interface do servidor. Use `0.0.0.0` para aceitar conexões vindas de um emulador ou celular (ex. Android via `10.0.2.2`). |
+| `--allowed-origin` | — | Origem permitida. **Pode repetir** para liberar várias (ex. o servidor de dev e os esquemas do WebView). Se você não passar nenhuma, qualquer origem é aceita. |
+| `--no-takeover` | — | Se a porta estiver ocupada, falha em vez de tomar o lugar de uma instância anterior. |
+
+Exemplo para um app no emulador Android, aceitando também o servidor de dev local:
+
+```json
+{
+  "mcpServers": {
+    "reagent": {
+      "command": "npx",
+      "args": [
+        "reagent-mcp", "start",
+        "--host", "0.0.0.0",
+        "--allowed-origin", "http://meu.aplicativo",
+        "--allowed-origin", "app://meu.aplicativo",
+        "--allowed-origin", "http://localhost:3000"
+      ]
+    }
+  }
+}
+```
+
+> Atenção: `--host 0.0.0.0` deixa a porta acessível na sua rede local enquanto o servidor roda. Use só em ambiente de desenvolvimento confiável e com dados fake.
+
+## Ferramentas disponíveis (v1)
+
+| Ferramenta | O que mostra |
 |---|---|
 | `get_app_snapshot` | Conexão, origem, sessão e adapters disponíveis. |
-| `get_redux_state` | Estado Redux atual; prefira um `path` (ex. `auth.user`). |
-| `get_storage` | Chaves allowlistadas de `local`/`session` storage. |
-| `get_runtime_errors` | Erros e rejeições recentes capturados no navegador. |
+| `get_redux_state` | O estado atual do Redux; dá para filtrar por caminho (ex. `auth.user`). |
+| `get_storage` | As chaves liberadas do `local`/`session` storage. |
+| `get_route` | A rota atual (pathname, search, hash, query). |
+| `get_network_activity` | As chamadas HTTP (axios) recentes. |
 
-## Decisões e segurança
+## Playground
 
-- Serialização type-preserving (via `jsan`): `Date`/`Map`/`Set` e referências
-  circulares são preservados, sem o erro clássico de `JSON.stringify`.
-- Limites de profundidade/entradas/tamanho nas respostas.
-- `get_storage` opera por allowlist (qualidade do dado e tamanho da resposta).
-- WS em loopback com validação de `Origin`.
-- Somente leitura: não há ferramentas de mutação na v1; o runtime não executa
-  código arbitrário enviado pelo agente.
-- Sanitização/redaction de segredos: **adiada** (ver proposta); a v1 pressupõe
-  dados de dev e modelo próprio.
-
-## Desenvolvimento
-
-```bash
-npm install --registry https://registry.npmjs.org/
-npm run build
-npm run typecheck
-```
+A pasta [`../playground`](../playground) tem um ambiente público de demonstração (Vite + React, publicado na Vercel): um app de exemplo com cenários prontos, documentação interativa das ferramentas, Storybook e um assistente de IA no modo **BYOK** (você usa sua própria chave) que executa as ferramentas de verdade via `initLocalRuntime`.
