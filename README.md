@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo-reagent.png" alt="reagent-mcp" width="200" />
+</p>
+
 # reagent-mcp
 
 Uma ferramenta que deixa um agente de IA (como o Kiro) "enxergar" o que está acontecendo dentro da sua aplicação React enquanto ela roda. Em vez de só ler o código, o agente consegue olhar os dados reais do app: o estado do Redux, o que está salvo no storage do navegador, a rota atual e as chamadas de rede.
@@ -220,7 +224,3 @@ Exemplo para um app no emulador Android, aceitando também o servidor de dev loc
 | `get_storage` | As chaves liberadas do `local`/`session` storage. |
 | `get_route` | A rota atual (pathname, search, hash, query). |
 | `get_network_activity` | As chamadas HTTP (axios) recentes. |
-
-## Playground
-
-A pasta [`../playground`](../playground) tem um ambiente público de demonstração (Vite + React, publicado na Vercel): um app de exemplo com cenários prontos, documentação interativa das ferramentas, Storybook e um assistente de IA no modo **BYOK** (você usa sua própria chave) que executa as ferramentas de verdade via `initLocalRuntime`.

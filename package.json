@@ -1,6 +1,6 @@
 {
   "name": "reagent-mcp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Agent-oriented React debugging via MCP. Dev-only runtime that lets an MCP agent inspect a running React app's Redux state, storage, route and network activity.",
   "license": "MIT",
   "author": "Anderson Araujo Macedo",

@@ -243,13 +243,6 @@ Exemplo para um app no emulador Android, aceitando também o dev server local:
 | `get_route` | Rota atual (pathname, search, hash, query). |
 | `get_network_activity` | Requisições HTTP (axios) recentes. |
 
-## Playground
-
-O diretório [`../playground`](../playground) contém o ambiente público de
-demonstração (Vite + React, deploy na Vercel): aplicação demo com cenários
-reproduzíveis, documentação interativa das ferramentas, Storybook e um
-assistente de IA **BYOK** que executa as ferramentas reais via `initLocalRuntime`.
-
 ## Uso em memória (sem WebSocket)
 
 Quando a aplicação inspecionada e o consumidor vivem na **mesma página** — um
